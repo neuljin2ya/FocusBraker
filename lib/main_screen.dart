@@ -31,10 +31,10 @@ class _MainScreenState extends State<MainScreen> {
         return;
       }
 
-      await ApiService.clearOverlayEvents();
 
       final userId = await ApiService.getUserId();
       if (userId != null) {
+        await ApiService.resetSessionIfExists();
         final sessionId = await ApiService.startSession(
           userId: userId,
           intensityLevel: _level.round(),
@@ -79,9 +79,7 @@ class _MainScreenState extends State<MainScreen> {
       debugPrint('isOverlayActive: $isOverlayActive');
 
       if (isOverlayActive == true) {
-        final events = await ApiService.getOverlayEvents();
-
-        // 👇 이것도 추가
+        final events = await ApiService.getOverlayEventsFromFile();
         debugPrint('events: $events');
 
         if (sessionId != null) {

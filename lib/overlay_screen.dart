@@ -1,7 +1,11 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math';
-import 'package:flutter/material.dart';
 
+import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
+
+import 'api_service.dart';
 
 class FloatingDustOverlay extends StatefulWidget {
   const FloatingDustOverlay({super.key});
@@ -15,10 +19,7 @@ class _FloatingDustOverlayState extends State<FloatingDustOverlay> {
   final List<_FloatingItemData> _items = [];
   Timer? _timer;
 
-  // 개수
   final int itemCount = 8;
-
-  // 맨 위 / 맨 아래 제외 영역
   final double topSafeGap = 90;
   final double bottomSafeGap = 120;
 
@@ -26,9 +27,54 @@ class _FloatingDustOverlayState extends State<FloatingDustOverlay> {
   void initState() {
     super.initState();
 
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await _clearEventFile();
       _initItems();
       _startFloating();
+    });
+  }
+
+  Future<void> _clearEventFile() async {
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      final file = File('${dir.path}/events.json');
+
+      if (await file.exists()) {
+        await file.delete();
+      }
+    } catch (e) {
+      debugPrint('events 파일 초기화 오류: $e');
+    }
+  }
+
+  Future<void> _runAway(int index) async {
+    final size = MediaQuery.of(context).size;
+    final item = _items[index];
+
+    debugPrint('터치됨: ${item.type.name}, index: $index');
+
+    final minY = topSafeGap;
+    final maxY = size.height - bottomSafeGap;
+
+    final events = await ApiService.getOverlayEventsFromFile();
+    final now = DateTime.now().toUtc();
+
+    events.add({
+      "distraction_type": item.type.name.toUpperCase(), // BUG / HAIR / DUST
+      "appeared_at": now.toIso8601String(),
+      "reacted_at": now.toIso8601String(),
+      "reaction_time_ms": 1, // 서버에서 양수 요구
+    });
+
+    await ApiService.saveOverlayEventsToFile(events);
+    debugPrint('저장된 events 개수: ${events.length}');
+
+    setState(() {
+      item.x = (item.x + (_random.nextBool() ? 40 : -40))
+          .clamp(0.0, size.width - item.size);
+      item.y = (item.y + (_random.nextBool() ? 30 : -30))
+          .clamp(minY, maxY - item.size);
+      item.angle += (_random.nextDouble() * 1.2) - 0.6;
     });
   }
 
@@ -44,9 +90,14 @@ class _FloatingDustOverlayState extends State<FloatingDustOverlay> {
   }
 
   _FloatingItemData _createRandomItem(Size size) {
-    final type = _random.nextInt(10) < 3
+    final rand = _random.nextInt(10);
+
+    final type = rand < 3
         ? FloatingType.dust
-        : FloatingType.hair;
+        : rand < 6
+        ? FloatingType.hair
+        : FloatingType.bug;
+
     final minY = topSafeGap;
     final maxY = size.height - bottomSafeGap;
 
@@ -55,12 +106,16 @@ class _FloatingDustOverlayState extends State<FloatingDustOverlay> {
       x: _random.nextDouble() * (size.width - 80),
       y: minY + _random.nextDouble() * (maxY - minY),
       size: type == FloatingType.dust
-          ? 28 + _random.nextDouble() * 32 // 먼지: 더 크게
-          : 55 + _random.nextDouble() * 45, // 머리카락: 훨씬 크게
+          ? 28 + _random.nextDouble() * 32
+          : type == FloatingType.hair
+          ? 55 + _random.nextDouble() * 45
+          : 60 + _random.nextDouble() * 40,
       angle: _random.nextDouble() * pi,
       opacity: type == FloatingType.dust
           ? 0.85 + _random.nextDouble() * 0.15
-          : 0.80 + _random.nextDouble() * 0.20, // 진하게
+          : type == FloatingType.hair
+          ? 0.80 + _random.nextDouble() * 0.20
+          : 0.95,
     );
   }
 
@@ -76,39 +131,20 @@ class _FloatingDustOverlayState extends State<FloatingDustOverlay> {
 
       setState(() {
         for (final item in _items) {
-          final dx = (_random.nextDouble() * 24) - 12;
-          final dy = (_random.nextDouble() * 20) - 10;
+          final maxX = size.width - item.size;
+          final maxYClamped = maxY - item.size;
 
-          final maxX = (size.width - item.size);
-          final maxYClamped = (maxY - item.size);
-
-          item.x = (item.x + (_random.nextBool() ? 120 : -120))
+          item.x = (item.x + (_random.nextBool() ? 60 : -60))
               .clamp(0.0, maxX > 0 ? maxX : 0.0);
 
-          item.y = (item.y + (_random.nextBool() ? 100 : -100))
-              .clamp(
+          item.y = (item.y + (_random.nextBool() ? 50 : -50)).clamp(
             minY,
             maxYClamped > minY ? maxYClamped : minY,
           );
+
+          item.angle += (_random.nextDouble() * 0.6) - 0.3;
         }
       });
-    });
-  }
-
-  void _runAway(int index) {
-    final size = MediaQuery.of(context).size;
-    final item = _items[index];
-
-    final minY = topSafeGap;
-    final maxY = size.height - bottomSafeGap;
-
-    setState(() {
-      // 손으로 치우면 확 튀어가게
-      item.x = (item.x + (_random.nextBool() ? 120 : -120))
-          .clamp(0.0, size.width - item.size);
-      item.y = (item.y + (_random.nextBool() ? 100 : -100))
-          .clamp(minY, maxY - item.size);
-      item.angle += (_random.nextDouble() * 1.2) - 0.6;
     });
   }
 
@@ -136,17 +172,28 @@ class _FloatingDustOverlayState extends State<FloatingDustOverlay> {
             left: item.x,
             top: item.y,
             child: GestureDetector(
-              behavior: HitTestBehavior.translucent,
-              onPanStart: (_) => _runAway(index),
+              behavior: HitTestBehavior.opaque,
               onTapDown: (_) => _runAway(index),
-              child: AnimatedRotation(
-                duration: const Duration(milliseconds: 1500),
-                turns: item.angle / (2 * pi),
-                child: Opacity(
-                  opacity: item.opacity,
-                  child: item.type == FloatingType.dust
-                      ? _DustItem(size: item.size)
-                      : _HairItem(size: item.size),
+              onPanStart: (_) => _runAway(index),
+              child: SizedBox(
+                width: item.size + 40,
+                height: item.size + 40,
+                child: Center(
+                  child: AnimatedRotation(
+                    duration: const Duration(milliseconds: 1500),
+                    turns: item.angle / (2 * pi),
+                    child: Opacity(
+                      opacity: item.opacity,
+                      child: item.type == FloatingType.dust
+                          ? _DustItem(size: item.size)
+                          : item.type == FloatingType.hair
+                          ? _HairItem(size: item.size)
+                          : _BugItem(
+                        size: item.size,
+                        assetPath: 'assets/bug2.png',
+                      ),
+                    ),
+                  ),
                 ),
               ),
             ),
@@ -157,7 +204,7 @@ class _FloatingDustOverlayState extends State<FloatingDustOverlay> {
   }
 }
 
-enum FloatingType { dust, hair }
+enum FloatingType { dust, hair, bug }
 
 class _FloatingItemData {
   FloatingType type;
@@ -184,34 +231,14 @@ class _DustItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    return Image.asset(
+      'assets/dust.png',
       width: size,
       height: size,
-      decoration: BoxDecoration(
-        color: Colors.grey.shade700.withOpacity(0.95),
-        shape: BoxShape.circle,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.35),
-            blurRadius: 3,
-            spreadRadius: 1,
-          ),
-        ],
-      ),
-      child: Center(
-        child: Container(
-          width: size * 0.55,
-          height: size * 0.55,
-          decoration: BoxDecoration(
-            color: Colors.grey.shade900.withOpacity(0.95),
-            shape: BoxShape.circle,
-          ),
-        ),
-      ),
+      fit: BoxFit.contain,
     );
   }
 }
-
 class _HairItem extends StatelessWidget {
   final double size;
 
@@ -222,6 +249,26 @@ class _HairItem extends StatelessWidget {
     return CustomPaint(
       size: Size(size, size * 0.55),
       painter: _HairPainter(),
+    );
+  }
+}
+
+class _BugItem extends StatelessWidget {
+  final double size;
+  final String assetPath;
+
+  const _BugItem({
+    required this.size,
+    required this.assetPath,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Image.asset(
+      assetPath,
+      width: size,
+      height: size,
+      fit: BoxFit.contain,
     );
   }
 }
